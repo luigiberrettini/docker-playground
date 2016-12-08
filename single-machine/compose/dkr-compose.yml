@@ -1,0 +1,22 @@
+version: "2"
+
+services:
+    lbwebhelloworldphp:
+        build:
+            context: .
+            dockerfile: dockerfile-app-php
+        image: lb-web-hello-world-php
+
+    lbwebhelloworldjs:
+        build:
+            context: .
+            dockerfile: dockerfile-app-js
+        image: lb-web-hello-world-js
+
+    loadbalancer:
+        build:
+            context: .
+            dockerfile: dockerfile-proxy
+        image: load-balancer
+        ports:
+         - "80:80"
