@@ -11,7 +11,7 @@ Vagrant.configure("2") do |config|
   (1..vm_number).each do |i|
     config.vm.define vm_name = "#{vm_prefix}-%01d" % i do |config|
       ssh_port = ("220%01d" % i).to_i
-      config.vm.box = "ubuntu/trusty64"
+      config.vm.box = "bento/ubuntu-18.04"
       config.vm.box_check_update = false
       config.vm.hostname = vm_name
       config.vm.network :forwarded_port, id: 'ssh', guest: 22, host: ssh_port, auto_correct: false, adapter: 1
@@ -22,39 +22,50 @@ Vagrant.configure("2") do |config|
         vb.memory = vm_memory
       end
       config.vm.provision "shell", inline: <<-SHELL.gsub(/^ +/, '')
-        echo "****************************** Configuring system settings"
+        echo "************************************************** Configuring system settings"
         sudo timedatectl set-timezone Europe/Rome
         sudo update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
-        echo "%sudo ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
-        echo "****************************** Downloading packages"
-        sudo printf 'Acquire {http::User-Agent "Mozilla/5.0 (Windows NT 5.1; rv:25.0) Gecko/20100101 Firefox/25.0";};' > /etc/apt/apt.conf
-        sudo aptitude -q -y update
-        sudo aptitude -q -y upgrade
-        sudo aptitude -q -y dist-upgrade
-        sudo aptitude -q -y install sysv-rc-conf git tree whois unzip linux-kernel-headers
-        echo "****************************** Updating Guest Additions"
+        echo "%sudo ALL=(ALL) NOPASSWD: ALL" | sudo tee -a /etc/sudoers
+        echo "************************************************** Downloading packages"
+        sudo apt-get -q -y update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get -q -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
+        sudo apt-get -q -y dist-upgrade
+        sudo apt-get -q -y install sudo linux-kernel-headers linux-headers-generic linux-headers-4.15.0-20-generic apt-transport-https ca-certificates software-properties-common curl git tree whois unzip
+        echo "************************************************** Updating Guest Additions"
         sudo wget -q -c http://download.virtualbox.org/virtualbox/LATEST.TXT -O /tmp/vbga-latest-version.txt
-        vbgaLatestVersion=$(cat /tmp/vbga-latest-version.txt)
+        vbgaLatestVersion=$(sudo cat /tmp/vbga-latest-version.txt)
         sudo rm /tmp/vbga-latest-version.txt
         sudo wget -q -c http://download.virtualbox.org/virtualbox/$vbgaLatestVersion/VBoxGuestAdditions_$vbgaLatestVersion.iso -O vbga.iso
-        sudo mount vbga.iso -o loop /mnt
-        sudo sh /mnt/VBoxLinuxAdditions.run -- force
+        sudo mount -o ro -o loop vbga.iso /mnt
+        pushd /lib/modules/4.15.0-12-generic/ && sudo ln -sv /usr/src/linux-headers-4.15.0-20-generic build && sudo ln -sv /usr/src/linux-headers-4.15.0-20-generic source && popd
+        sudo /mnt/VBoxLinuxAdditions.run && rm /lib/modules/4.15.0-12-generic/build && rm /lib/modules/4.15.0-12-generic/source
         sudo umount /mnt
         sudo rm vbga.iso
-        sudo sysv-rc-conf vboxadd on
-        echo "****************************** Installing Docker"
-        sudo -i <<HEREDOC
-          if ! docker version &>/dev/null; then
-            echo "*** Installing Docker Engine"
-            wget -qO- https://experimental.docker.com/ | bash
-            usermod -aG docker vagrant
-          fi
-          if ! docker-compose --version &>/dev/null; then
-            echo "*** Installing Docker Compose"
-            curl --silent -L https://github.com/docker/compose/releases/download/1.8.0/docker-compose-`uname -s`-`uname -m` > /usr/local/bin/docker-compose
-            chmod +x /usr/local/bin/docker-compose
-          fi
-        HEREDOC
+        sudo systemctl enable vboxadd && sudo systemctl start vboxadd
+        echo '************************************************** Installing Docker'
+        echo '********** Adding Docker deb repository'
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+        sudo add-apt-repository 'deb [arch=amd64] https://download.docker.com/linux/ubuntu xenial stable'
+        echo '********** Installing Docker Engine'
+        sudo apt-get -q -y update
+        sudo apt-get -q -y install docker-ce='18.03.1~ce-0~ubuntu'
+        sudo systemctl enable docker && sudo systemctl start docker
+        sudo usermod -aG docker vagrant
+        echo '********** Enabling socket and HTTP Docker APIs'
+        echo 'Usage:'
+        echo "echo -e 'GET /images/json HTTP/1.0\\\\r\\\\n' | netcat -U /var/run/docker.sock"
+        echo 'curl localhost:4243/images/json'
+        sudo mkdir -p /etc/systemd/system/docker.service.d
+        sudo echo '[Service]' | sudo tee /etc/systemd/system/docker.service.d/hosts.conf
+        sudo echo 'ExecStart=' | sudo tee -a /etc/systemd/system/docker.service.d/hosts.conf
+        sudo echo 'ExecStart=/usr/bin/dockerd -H unix:///var/run/docker.sock -H tcp://0.0.0.0:4243' | sudo tee -a /etc/systemd/system/docker.service.d/hosts.conf
+        sudo systemctl daemon-reload
+        sudo systemctl restart docker
+        echo '********** Installing Docker Compose'
+        sudo wget -q https://github.com/docker/compose/releases/download/1.21.2/docker-compose-`uname -s`-`uname -m` -O /usr/local/bin/docker-compose
+        sudo chmod +x /usr/local/bin/docker-compose
+        echo '************************************************** Rebooting'
+        sudo reboot
       SHELL
     end
   end
